@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
-import { heightAt } from './terrain.js';
+import { surfaceHeight } from './terrain.js';
 
 // Perseverance real: 3.0 m de largo, 2.7 m de ancho, 2.2 m de alto
 const REAL_LENGTH = 3.0;
@@ -20,8 +20,87 @@ const CAMERA_INFO = {
   Down_Look_Camera: 'cámara EDL que mira hacia abajo (aterrizaje)',
 };
 
-// Contactos de las ruedas (izquierda/derecha × delantera/media/trasera), en metros, frente = +Z
-export const WHEELS = [-1.05, 1.05].flatMap(x => [1.05, 0.0, -1.05].map(z => new THREE.Vector2(x, z)));
+// Ejes de las ruedas medidos en el modelo (m): lados ±X, filas delantera/media/trasera en Z (frente = +Z)
+const WHEEL_X = 1.1;
+const WHEEL_Z = [1.25, 0.05, -0.95];
+export const MID_WHEELS = [-WHEEL_X, WHEEL_X].map(x => new THREE.Vector2(x, WHEEL_Z[1]));
+
+// Wheels_objs trae las 6 ruedas en 3 mallas (una por material). Separa los triángulos
+// de cada rueda y la cuelga de un pivote en su eje para poder girarla y orientarla.
+function rigWheels(model) {
+  const group = model.getObjectByName('Wheels_objs');
+  if (!group) return [];
+  model.updateMatrixWorld(true);
+  const R = group.matrixWorld.clone(), Rinv = R.clone().invert();
+  const axis = new THREE.Vector3(1, 0, 0).transformDirection(Rinv);
+  const up = new THREE.Vector3(0, 1, 0).transformDirection(Rinv);
+  const rowOf = z => (z > (WHEEL_Z[0] + WHEEL_Z[1]) / 2 ? 0 : z > (WHEEL_Z[1] + WHEEL_Z[2]) / 2 ? 1 : 2);
+  const wheelOf = (x, z) => (x < 0 ? 0 : 3) + rowOf(z);
+  const parts = Array.from({ length: 6 }, () => ({ meshes: [], box: new THREE.Box3() }));
+  const v = new THREE.Vector3();
+
+  for (const mesh of group.children.filter(o => o.isMesh)) {
+    const g = mesh.geometry.clone().applyMatrix4(mesh.matrix);
+    const pos = g.attributes.position;
+    const world = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) v.fromBufferAttribute(pos, i).applyMatrix4(R).toArray(world, i * 3);
+    const index = g.index ? g.index.array : Uint32Array.from({ length: pos.count }, (_, i) => i);
+    const lists = Array.from({ length: 6 }, () => []);
+    for (let t = 0; t < index.length; t += 3) {
+      const a = index[t] * 3, b = index[t + 1] * 3, c = index[t + 2] * 3;
+      const k = wheelOf((world[a] + world[b] + world[c]) / 3, (world[a + 2] + world[b + 2] + world[c + 2]) / 3);
+      lists[k].push(index[t], index[t + 1], index[t + 2]);
+      for (const j of [a, b, c]) parts[k].box.expandByPoint(v.fromArray(world, j));
+    }
+    lists.forEach((list, k) => {
+      if (!list.length) return;
+      const sub = new THREE.BufferGeometry();
+      for (const name in g.attributes) sub.setAttribute(name, g.attributes[name]);
+      sub.setIndex(new THREE.BufferAttribute(Uint32Array.from(list), 1));
+      const m = new THREE.Mesh(sub, mesh.material);
+      m.castShadow = m.receiveShadow = true;
+      parts[k].meshes.push(m);
+    });
+    group.remove(mesh);
+  }
+
+  return parts.map((p, k) => {
+    const cw = p.box.getCenter(new THREE.Vector3());
+    const c = cw.clone().applyMatrix4(Rinv);
+    const pivot = new THREE.Object3D();
+    pivot.position.copy(c);
+    const inner = new THREE.Group();
+    inner.position.copy(c).negate();
+    inner.add(...p.meshes);
+    pivot.add(inner);
+    group.add(pivot);
+    return {
+      pivot, axis, up, x: cw.x, z: cw.z,
+      radius: (p.box.max.y - p.box.min.y) / 2,
+      corner: k % 3 !== 1, spin: 0, steer: 0,
+    };
+  });
+}
+
+const qSpin = new THREE.Quaternion(), qSteer = new THREE.Quaternion();
+
+// Gira cada rueda según su avance real y orienta las de las esquinas como el rover:
+// Ackermann al doblar y en diagonal (tangente) al girar en el sitio
+function animateWheels(wheels, speed, yawRate, dt) {
+  const k = 1 - Math.exp(-dt * 6);
+  for (const w of wheels) {
+    const vx = yawRate * w.z, vz = speed - yawRate * w.x;
+    if (w.corner && Math.hypot(vx, vz) > 0.02) {
+      let a = Math.atan2(vx, vz);
+      if (a > Math.PI / 2) a -= Math.PI; else if (a < -Math.PI / 2) a += Math.PI;
+      w.steer += (a - w.steer) * k;
+    }
+    w.spin += (vx * Math.sin(w.steer) + vz * Math.cos(w.steer)) * dt / w.radius;
+    qSteer.setFromAxisAngle(w.up, w.steer);
+    qSpin.setFromAxisAngle(w.axis, w.spin);
+    w.pivot.quaternion.multiplyQuaternions(qSteer, qSpin);
+  }
+}
 
 export async function loadRover() {
   const draco = new DRACOLoader().setDecoderPath('/draco/');
@@ -73,6 +152,9 @@ export async function loadRover() {
   const root = new THREE.Group();
   root.add(model);
   root.userData.cameras = cams;
+  root.userData.wheels = rigWheels(model);
+  const rad = root.userData.wheels.map(w => w.radius * 2);
+  console.log(`[rover] ${rad.length} ruedas separadas, diámetro ≈ ${(rad.reduce((a, b) => a + b, 0) / (rad.length || 1)).toFixed(2)} m`);
   return root;
 }
 
@@ -82,7 +164,7 @@ export function createRoverController(rover, startX, startZ, startYaw) {
   addEventListener('keyup', e => keys.delete(e.code));
   addEventListener('blur', () => keys.clear());
 
-  const state = { x: startX, z: startZ, yaw: startYaw, speed: 0, moved: 0 };
+  const state = { x: startX, z: startZ, yaw: startYaw, speed: 0 };
   const up = new THREE.Vector3(), fwd = new THREE.Vector3(), right = new THREE.Vector3();
   const m = new THREE.Matrix4(), q = new THREE.Quaternion();
 
@@ -90,13 +172,13 @@ export function createRoverController(rover, startX, startZ, startYaw) {
     const sy = Math.sin(state.yaw), cy = Math.cos(state.yaw);
     const x = state.x + lx * cy + lz * sy;
     const z = state.z - lx * sy + lz * cy;
-    return new THREE.Vector3(x, heightAt(x, z), z);
+    return new THREE.Vector3(x, surfaceHeight(x, z), z);
   }
 
   function place(dt) {
-    // Plano de apoyo a partir de los contactos de las ruedas
-    const fl = contact(-1.05, 1.05), fr = contact(1.05, 1.05);
-    const bl = contact(-1.05, -1.05), br = contact(1.05, -1.05);
+    // Plano de apoyo a partir de los contactos de las ruedas de las esquinas
+    const fl = contact(-WHEEL_X, WHEEL_Z[0]), fr = contact(WHEEL_X, WHEEL_Z[0]);
+    const bl = contact(-WHEEL_X, WHEEL_Z[2]), br = contact(WHEEL_X, WHEEL_Z[2]);
     fwd.subVectors(fl.clone().add(fr), bl.clone().add(br)).normalize();
     right.subVectors(fr.clone().add(br), fl.clone().add(bl)).normalize();
     up.crossVectors(fwd, right).normalize();       // z × x = y
@@ -126,12 +208,13 @@ export function createRoverController(rover, startX, startZ, startYaw) {
       if (Math.abs(state.speed) < 0.01 && !throttle) state.speed = 0;
       const steer = (leftKey ? 1 : 0) - (rightKey ? 1 : 0);
       // Gira en sitio si está detenido (como el rover real), o mientras avanza
-      state.yaw += steer * TURN_RATE * dt * (state.speed < -0.05 ? -1 : 1);
+      const yawRate = steer * TURN_RATE * (state.speed < -0.05 ? -1 : 1);
+      state.yaw += yawRate * dt;
       const d = state.speed * dt;
       state.x += Math.sin(state.yaw) * d;
       state.z += Math.cos(state.yaw) * d;
-      state.moved = Math.abs(d) + Math.abs(steer) * dt * 0.6;
       place(dt);
+      animateWheels(rover.userData.wheels, state.speed, yawRate, dt);
       return state;
     },
     driving() {

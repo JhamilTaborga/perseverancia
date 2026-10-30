@@ -1,76 +1,145 @@
 import * as THREE from 'three';
-import { heightAt } from './terrain.js';
-import { WHEELS } from './rover.js';
+import { surfaceHeight } from './terrain.js';
+import { MID_WHEELS } from './rover.js';
 
-const MAX = 6000;
-const STEP = 0.22;      // metros entre huellas
-const WHEEL_W = 0.42;
+const MAX = 5000;        // puntos por huella (~600 m)
+const STEP = 0.12;       // metros entre puntos de la franja
+const WIDTH = 0.62;      // rueda de 0.40 m + bordes de arena levantada
+const TILE = 0.4;        // metros de huella por repetición de la textura (8 garras)
+const LIFT = 0.012;
 
-// Textura de la banda de rodadura: surcos de las garras de la rueda
-function treadTexture() {
-  const c = document.createElement('canvas');
-  c.width = 64; c.height = 32;
-  const g = c.getContext('2d');
-  g.clearRect(0, 0, 64, 32);
-  const grd = g.createLinearGradient(0, 0, 64, 0);
-  grd.addColorStop(0, 'rgba(0,0,0,0)');
-  grd.addColorStop(0.15, 'rgba(0,0,0,0.55)');
-  grd.addColorStop(0.85, 'rgba(0,0,0,0.55)');
-  grd.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = grd;
-  g.fillRect(0, 0, 64, 32);
-  g.fillStyle = 'rgba(0,0,0,0.35)';
-  for (let x = 8; x < 56; x += 12) g.fillRect(x, 2, 3, 28);
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
+// Relieve de la huella: surco donde pisa la rueda, bordes levantados a los lados
+// y las marcas curvas de las garras (grousers) de la rueda de Perseverance
+function heightField(u, v) {
+  const t = Math.abs(u - 0.5) * 2;
+  const groove = 1 - THREE.MathUtils.smoothstep(t, 0.6, 0.72);
+  const berm = Math.exp(-(((t - 0.8) / 0.08) ** 2));
+  const g = (v * 8 + Math.abs(u - 0.5) * 0.9) % 1;
+  const grouser = Math.exp(-(((g - 0.5) / 0.1) ** 2));
+  return -0.5 * groove + 0.35 * berm - 0.45 * grouser * groove;
 }
 
-export function createTracks() {
-  const geo = new THREE.PlaneGeometry(WHEEL_W, STEP * 1.15);
-  geo.rotateX(-Math.PI / 2);
-  const mat = new THREE.MeshStandardMaterial({
-    map: treadTexture(), color: 0x3a1a0c, transparent: true, opacity: 0.75,
-    roughness: 1, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2,
-  });
-  const mesh = new THREE.InstancedMesh(geo, mat, MAX);
-  mesh.count = 0;
+function makeTextures(anisotropy) {
+  const W = 64, H = 128, S = 6;
+  const albedo = new Uint8Array(W * H * 4);
+  const normal = new Uint8Array(W * H * 4);
+  const h = (x, y) => heightField(THREE.MathUtils.clamp(x / (W - 1), 0, 1), (((y % H) + H) % H) / H);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      const u = x / (W - 1), t = Math.abs(u - 0.5) * 2;
+      const hv = h(x, y);
+      // la arena removida se ve más oscura en el surco y más clara en los bordes
+      const shade = THREE.MathUtils.clamp(0.86 + hv * 0.28, 0, 1);
+      albedo[i] = albedo[i + 1] = albedo[i + 2] = shade * 255;
+      albedo[i + 3] = (1 - THREE.MathUtils.smoothstep(t, 0.82, 1.0)) * 235;
+      const nx = (h(x - 1, y) - h(x + 1, y)) * S, ny = (h(x, y - 1) - h(x, y + 1)) * S;
+      const len = Math.hypot(nx, ny, 1);
+      normal[i] = (nx / len * 0.5 + 0.5) * 255;
+      normal[i + 1] = (ny / len * 0.5 + 0.5) * 255;
+      normal[i + 2] = (1 / len * 0.5 + 0.5) * 255;
+      normal[i + 3] = 255;
+    }
+  }
+  const make = (data, color) => {
+    const tex = new THREE.DataTexture(data, W, H);
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.generateMipmaps = true;
+    tex.anisotropy = anisotropy;
+    if (color) tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+    return tex;
+  };
+  return { map: make(albedo, true), normalMap: make(normal, false) };
+}
+
+// Una franja continua (ribbon) que sigue a una rueda, en un buffer circular
+function createRibbon(material) {
+  const pos = new Float32Array(MAX * 2 * 3);
+  const nrm = new Float32Array(MAX * 2 * 3);
+  const uv = new Float32Array(MAX * 2 * 2);
+  const idx = new Uint32Array(MAX * 6);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  const mesh = new THREE.Mesh(geo, material);
   mesh.frustumCulled = false;
   mesh.receiveShadow = true;
+  mesh.renderOrder = 1;
 
-  let next = 0, travelled = 0;
-  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), qn = new THREE.Quaternion();
-  const n = new THREE.Vector3(), p = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
-  const Y = new THREE.Vector3(0, 1, 0);
+  let head = -1, last = null, dist = 0;
+  const p = new THREE.Vector3(), side = new THREE.Vector3(), n = new THREE.Vector3();
 
-  function stamp(state) {
-    const sy = Math.sin(state.yaw), cy = Math.cos(state.yaw);
-    // solo las ruedas delanteras y traseras de cada lado; las medias pisan la misma huella
-    for (const w of WHEELS) {
-      if (w.y === 0) continue;
-      const x = state.x + w.x * cy + w.y * sy;
-      const z = state.z - w.x * sy + w.y * cy;
-      const e = 0.3;
-      n.set(heightAt(x - e, z) - heightAt(x + e, z), 2 * e, heightAt(x, z - e) - heightAt(x, z + e)).normalize();
-      qn.setFromUnitVectors(Y, n);
-      q.setFromAxisAngle(Y, state.yaw).premultiply(qn);
-      p.set(x, heightAt(x, z) + 0.02, z);
-      m.compose(p, q, one);
-      mesh.setMatrixAt(next, m);
-      next = (next + 1) % MAX;
-      mesh.count = Math.min(mesh.count + 1, MAX);
+  function writePoint(i, x, z, dx, dz) {
+    side.set(dz, 0, -dx).normalize().multiplyScalar(WIDTH / 2);
+    const e = 0.25;
+    n.set(surfaceHeight(x - e, z) - surfaceHeight(x + e, z), 2 * e,
+      surfaceHeight(x, z - e) - surfaceHeight(x, z + e)).normalize();
+    for (let s = 0; s < 2; s++) {
+      const sign = s === 0 ? 1 : -1;
+      const vx = x + side.x * sign, vz = z + side.z * sign;
+      p.set(vx, surfaceHeight(vx, vz) + LIFT, vz);
+      p.toArray(pos, (i * 2 + s) * 3);
+      n.toArray(nrm, (i * 2 + s) * 3);
+      uv[(i * 2 + s) * 2] = s;
+      uv[(i * 2 + s) * 2 + 1] = dist / TILE;
     }
-    mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  function setSegment(i, connect) {
+    const j = (i + 1) % MAX, o = i * 6;
+    if (connect) idx.set([2 * i, 2 * i + 1, 2 * j, 2 * i + 1, 2 * j + 1, 2 * j], o);
+    else idx.fill(0, o, o + 6);
   }
 
   return {
     mesh,
-    update(state) {
-      travelled += state.moved;
-      if (travelled >= STEP) {
-        travelled = 0;
-        stamp(state);
+    update(x, z, hx, hz) {
+      if (last) {
+        const dx = x - last.x, dz = z - last.z, d = Math.hypot(dx, dz);
+        if (d < STEP) return;
+        dist += d;
+        const prev = head;
+        head = (head + 1) % MAX;
+        writePoint(head, x, z, dx, dz);
+        setSegment(prev, true);
+        setSegment(head, false);   // corta la unión con el punto más viejo del buffer
+      } else {
+        head = 0;
+        writePoint(head, x, z, hx, hz);
       }
+      last = { x, z };
+      for (const a of ['position', 'normal', 'uv']) geo.attributes[a].needsUpdate = true;
+      geo.index.needsUpdate = true;
+    },
+  };
+}
+
+export function createTracks(anisotropy = 8) {
+  const { map, normalMap } = makeTextures(anisotropy);
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xc98a5e, map, normalMap, normalScale: new THREE.Vector2(1.6, 1.6),
+    roughness: 1, metalness: 0, transparent: true, depthWrite: false,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+  });
+  const group = new THREE.Group();
+  const ribbons = MID_WHEELS.map(() => createRibbon(material));
+  for (const r of ribbons) group.add(r.mesh);
+
+  return {
+    mesh: group,
+    update(state) {
+      const sy = Math.sin(state.yaw), cy = Math.cos(state.yaw);
+      MID_WHEELS.forEach((w, k) => {
+        const x = state.x + w.x * cy + w.y * sy;
+        const z = state.z - w.x * sy + w.y * cy;
+        ribbons[k].update(x, z, sy, cy);
+      });
     },
   };
 }

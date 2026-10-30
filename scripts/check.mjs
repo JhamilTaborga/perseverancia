@@ -7,6 +7,7 @@ import path from 'node:path';
 const URL = 'http://localhost:5173/';
 const OUT = path.resolve('screenshots/check.png');
 const OUT_START = path.resolve('screenshots/check-inicio.png');
+const OUT_TURN = path.resolve('screenshots/check-giro.png');
 
 async function serverUp() {
   try { return (await fetch(URL)).ok; } catch { return false; }
@@ -80,19 +81,37 @@ await page.screenshot({ path: OUT_START });
 await page.mouse.click(800, 450);
 await page.keyboard.down('KeyW');
 await page.waitForTimeout(4000);
+const wheelState = () => page.evaluate(() => (window.__rover?.userData.wheels || [])
+  .map(w => ({ spin: w.spin, steer: w.steer })));
+const degrees = ws => ws.map(w => (w.steer * 180 / Math.PI).toFixed(0)).join(' ');
 await page.keyboard.down('KeyA');
 await page.waitForTimeout(1800);
+const turning = await wheelState();
 await page.keyboard.up('KeyA');
 await page.waitForTimeout(1500);
 await page.keyboard.up('KeyW');
 await page.waitForTimeout(1500);
 await page.screenshot({ path: OUT });
+// Giro en el sitio: las ruedas de las esquinas deben quedar en diagonal
+await page.keyboard.down('KeyD');
+await page.waitForTimeout(1200);
+const spinning = await wheelState();
+await page.screenshot({ path: OUT_TURN });
+await page.keyboard.up('KeyD');
+const wheels = await wheelState();
+if (wheels.length) {
+  logs.push('[rover] giro de ruedas (vueltas): ' + wheels.map(w => (w.spin / (2 * Math.PI)).toFixed(1)).join(' '));
+  logs.push('[rover] orientación al doblar (°):     ' + degrees(turning));
+  logs.push('[rover] orientación girando en sitio (°): ' + degrees(spinning));
+  if (wheels.some(w => Math.abs(w.spin) < 0.5)) errors.push('[check] alguna rueda no giró al conducir');
+}
 await browser.close();
 if (server) server.kill();
 
 for (const l of logs) console.log(l);
 console.log(`Captura inicio: ${OUT_START}`);
 console.log(`Captura tras conducir: ${OUT}`);
+console.log(`Captura girando en sitio: ${OUT_TURN}`);
 for (const w of warnings) console.log(w);
 if (errors.length) {
   console.log(`\n${errors.length} error(es):`);

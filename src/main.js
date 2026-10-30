@@ -48,9 +48,9 @@ sun.target.position.copy(controls.target);
 sun.castShadow = true;
 sun.shadow.mapSize.set(4096, 4096);
 const sc = sun.shadow.camera;
-sc.left = -70; sc.right = 70; sc.top = 70; sc.bottom = -70; sc.near = 1; sc.far = 800;
-sun.shadow.bias = -0.0004;
-sun.shadow.normalBias = 0.05;
+sc.left = -40; sc.right = 40; sc.top = 40; sc.bottom = -40; sc.near = 1; sc.far = 800;
+sun.shadow.bias = -0.0002;
+sun.shadow.normalBias = 0.02;
 sun.shadow.radius = 4;
 scene.add(sun, sun.target);
 scene.add(new THREE.HemisphereLight(0xe8a878, 0x5a2814, 0.9));
@@ -62,12 +62,13 @@ scene.add(createMoons());
 const dust = createDust(new THREE.Vector3(START.x, heightAt(START.x, START.z) - 1, START.z));
 scene.add(dust);
 
-const tracks = createTracks();
+const tracks = createTracks(renderer.capabilities.getMaxAnisotropy());
 scene.add(tracks.mesh);
 
 let rover = null, drive = null;
 loadRover().then(r => {
   rover = r;
+  if (import.meta.env.DEV) window.__rover = rover;
   scene.add(rover);
   drive = createRoverController(rover, START.x, START.z, START.yaw);
 }).catch(e => console.error('[rover] no se pudo cargar el modelo:', e));

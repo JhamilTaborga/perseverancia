@@ -26,7 +26,7 @@ function dunes(x, z) {
 export function heightAt(x, z) {
   let h = fbm(x * 0.004, z * 0.004, 5) * 9;
   h += dunes(x, z);
-  h += fbm(x * 0.05, z * 0.05, 3) * 0.35;
+  h += fbm(x * 0.05, z * 0.05, 3) * 0.15;
   // Mesetas y montañas lejanas en el horizonte
   const r = Math.hypot(x, z);
   const far = THREE.MathUtils.smoothstep(r, 380, 650);
@@ -35,8 +35,27 @@ export function heightAt(x, z) {
   return h;
 }
 
+const SIZE = 1400, SEG = 420, CELL = SIZE / SEG;
+
+// Altura de la malla tal como se dibuja (interpolada en sus triángulos), para que
+// ruedas y huellas apoyen exactamente sobre la superficie visible
+export function surfaceHeight(x, z) {
+  const gx = (x + SIZE / 2) / CELL, gz = (z + SIZE / 2) / CELL;
+  const ix = Math.floor(gx), iz = Math.floor(gz);
+  const fx = gx - ix, fz = gz - iz;
+  const x0 = ix * CELL - SIZE / 2, z0 = iz * CELL - SIZE / 2;
+  const hb = heightAt(x0, z0 + CELL), hd = heightAt(x0 + CELL, z0);
+  // PlaneGeometry divide cada celda por la diagonal b-d
+  if (fx + fz <= 1) {
+    const ha = heightAt(x0, z0);
+    return ha + (hd - ha) * fx + (hb - ha) * fz;
+  }
+  const hc = heightAt(x0 + CELL, z0 + CELL);
+  return hc + (hb - hc) * (1 - fx) + (hd - hc) * (1 - fz);
+}
+
 export function createTerrain() {
-  const size = 1400, seg = 420;
+  const size = SIZE, seg = SEG;
   const geo = new THREE.PlaneGeometry(size, size, seg, seg);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position;
@@ -82,11 +101,11 @@ export function createTerrain() {
           float warp = vnoise(w * 0.15) * 6.0;
           float ph = dot(w, vec2(0.825, 0.565)) * 6.5 + warp;
           float fade = 1.0 - smoothstep(25.0, 140.0, length(vWPos - cameraPosition));
-          vec2 g = vec2(0.825, 0.565) * cos(ph) * 0.22;
-          g += (vec2(vnoise(w * 9.0), vnoise(w * 9.0 + 17.0)) - 0.5) * 0.25;
+          vec2 g = vec2(0.825, 0.565) * cos(ph) * 0.07;
+          g += (vec2(vnoise(w * 9.0), vnoise(w * 9.0 + 17.0)) - 0.5) * 0.08;
           vec3 pert = (viewMatrix * vec4(g.x, 0.0, g.y, 0.0)).xyz;
           normal = normalize(normal - pert * fade);
-          diffuseColor.rgb *= 1.0 + (sin(ph) * 0.06 + (vnoise(w * 3.0) - 0.5) * 0.12) * fade;
+          diffuseColor.rgb *= 1.0 + (sin(ph) * 0.02 + (vnoise(w * 3.0) - 0.5) * 0.08) * fade;
         }`);
   };
   const mesh = new THREE.Mesh(geo, mat);

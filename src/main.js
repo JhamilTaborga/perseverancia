@@ -12,6 +12,10 @@ import { createMoons } from './moons.js';
 import { createDust } from './dust.js';
 import { loadRover, createRoverController } from './rover.js';
 import { createTracks } from './tracks.js';
+import { createMissionControl } from './mission/hud.js';
+
+const mission = createMissionControl();
+if (import.meta.env.DEV) window.__mission = mission;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setSize(innerWidth, innerHeight);

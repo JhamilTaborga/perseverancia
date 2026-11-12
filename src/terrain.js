@@ -64,10 +64,11 @@ export function createTerrain() {
 
   const nrm = geo.attributes.normal;
   const colors = new Float32Array(pos.count * 3);
-  const sand = new THREE.Color(0xc98552);
-  const crest = new THREE.Color(0xe2aa74);
-  const rock = new THREE.Color(0x74402a);
-  const dark = new THREE.Color(0x9a5634);
+  // Tonos tomados de las fotos de Percy: arena color caramelo, menos naranja que antes
+  const sand = new THREE.Color(0xc08758);
+  const crest = new THREE.Color(0xd9a679);
+  const rock = new THREE.Color(0x6f4430);
+  const dark = new THREE.Color(0x8f5d3e);
   const c = new THREE.Color();
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), z = pos.getZ(i);
@@ -82,7 +83,9 @@ export function createTerrain() {
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.97, metalness: 0 });
-  // Ondulaciones de arena (ripples) y grano fino perturbando la normal en el shader
+  // Detalle de la arena en el shader (se apaga con la distancia para no parpadear):
+  // ondulaciones asimétricas (ladera suave, cara abrupta) más una segunda familia chica,
+  // manchas a varias escalas, granos oscuros y claros, grava suelta y crestas de grano grueso más oscuro
   mat.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
@@ -98,14 +101,45 @@ export function createTerrain() {
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         {
           vec2 w = vWPos.xz;
-          float warp = vnoise(w * 0.15) * 6.0;
-          float ph = dot(w, vec2(0.825, 0.565)) * 6.5 + warp;
-          float fade = 1.0 - smoothstep(25.0, 140.0, length(vWPos - cameraPosition));
-          vec2 g = vec2(0.825, 0.565) * cos(ph) * 0.07;
-          g += (vec2(vnoise(w * 9.0), vnoise(w * 9.0 + 17.0)) - 0.5) * 0.08;
+          float dist = length(vWPos - cameraPosition);
+          float fade = 1.0 - smoothstep(25.0, 140.0, dist);   // ondulaciones
+          float near = 1.0 - smoothstep(6.0, 22.0, dist);     // granos y grava
+          float mid = 1.0 - smoothstep(60.0, 260.0, dist);    // manchas
+
+          // Ondulaciones: perfil en diente de sierra suavizado (sube 70 %, cae 30 %)
+          vec2 dir = vec2(0.825, 0.565);
+          float ph = dot(w, dir) * 1.035 + vnoise(w * 0.15) * 0.95;
+          float t = fract(ph);
+          float slope = t < 0.7 ? 1.0 / 0.7 : -1.0 / 0.3;
+          slope *= smoothstep(0.0, 0.08, t) * smoothstep(1.0, 0.92, t) + 0.15;
+          float crest = smoothstep(0.55, 0.7, t) * smoothstep(0.85, 0.7, t);
+          vec2 dir2 = vec2(0.42, -0.91);
+          float ph2 = dot(w, dir2) * 2.6 + vnoise(w * 0.4 + 9.0) * 1.3;
+          vec2 g = dir * slope * 0.03 + dir2 * cos(ph2 * 6.2832) * 0.012;
+          g *= fade * (0.55 + 0.45 * vnoise(w * 0.07));         // hay zonas más lisas que otras
+
+          // Grano fino y grava suelta (relieve)
+          vec2 grain = vec2(vnoise(w * 11.0), vnoise(w * 11.0 + 17.0)) - 0.5;
+          g += grain * 0.09 * near;
+          vec2 gc = floor(w * 5.0), gf = fract(w * 5.0) - 0.5;
+          float pick = h21(gc + 3.1);
+          vec2 off = (vec2(h21(gc + 7.7), h21(gc + 1.3)) - 0.5) * 0.5;
+          float pr = 0.12 + 0.18 * h21(gc + 5.9);
+          float pebble = step(0.86, pick) * (1.0 - smoothstep(pr * 0.7, pr, length(gf - off)));
+          g += normalize(gf - off + 1e-4) * pebble * 0.35 * near;
+
           vec3 pert = (viewMatrix * vec4(g.x, 0.0, g.y, 0.0)).xyz;
-          normal = normalize(normal - pert * fade);
-          diffuseColor.rgb *= 1.0 + (sin(ph) * 0.02 + (vnoise(w * 3.0) - 0.5) * 0.08) * fade;
+          normal = normalize(normal - pert);
+
+          // Color: manchas grandes y medianas, crestas de grano grueso más oscuras, granos sueltos
+          float mott = vnoise(w * 0.35) * 0.5 + vnoise(w * 1.3 + 4.0) * 0.3 + vnoise(w * 4.5 + 8.0) * 0.2;
+          vec3 col = diffuseColor.rgb * (0.9 + 0.2 * mix(0.5, mott, mid));
+          col = mix(col, col * vec3(0.84, 0.82, 0.84), crest * fade * 0.55);
+          float sp = h21(floor(w * 38.0));
+          col *= 1.0 + near * (sp > 0.93 ? -0.32 : (sp < 0.05 ? 0.16 : 0.0));
+          col = mix(col, vec3(0.30, 0.24, 0.21), pebble * near * 0.75);   // grava basáltica oscura
+          float lum = dot(col, vec3(0.299, 0.587, 0.114));
+          diffuseColor.rgb = mix(vec3(lum), col, 0.9);                    // un poco menos saturado
         }`);
   };
   const mesh = new THREE.Mesh(geo, mat);

@@ -5,6 +5,8 @@ Paisaje de Marte cinematográfico en Vite + Three.js con el rover Perseverance d
 ## Qué hay
 
 - **Escena** (`src/`): dunas procedurales con ondulaciones suaves (`terrain.js`), rocas instanciadas (`rocks.js`), cielo caramelo con halo azulado y bruma (`sky.js`), sol de tarde con sombras, Fobos y Deimos (`moons.js`), polvo flotante (`dust.js`) y post-proceso (bloom, viñeta, grano) en `main.js`.
+- **Física de rocas** (`physics.js`, sin librerías): las rocas de radio ≥ 0,45 m son obstáculos (el rover choca y se frena; caja del rover contra círculo de la roca, vía `collide` en `createRoverController`). Las más chicas a menos de 100 m del inicio, más 520 de grava extra, son piedras sueltas: las ruedas las exprimen hacia los lados, saltan, ruedan cuesta abajo con g = 3,71 m/s², la arena las frena, chocan entre sí y se duermen quietas. `window.__physics` y `window.__drive` solo existen en desarrollo.
+- **Arena** (`terrain.js`): tono caramelo; el shader suma ondulaciones asimétricas y una segunda familia chica, manchas, granos y grava con relieve, que se apagan con la distancia.
 - **Rover** (`rover.js`): modelo oficial `public/models/perseverance.glb` (Draco; decodificadores en `public/draco/`), escalado a tamaño real (3.0 m de largo) con el mástil desplegado. Se maneja con WASD/flechas y la cámara lo sigue.
 - **Ruedas**: el GLB trae las 6 ruedas en una sola malla; `rigWheels` las separa en pivotes. Giran según la distancia recorrida y las de las esquinas se orientan (Ackermann al doblar, en diagonal al girar en el sitio).
 - **Huellas** (`tracks.js`): dos franjas continuas con normal map (surco, garras, bordes). Se apoyan con `surfaceHeight`, que da la altura exacta de la malla dibujada.
@@ -15,7 +17,7 @@ Paisaje de Marte cinematográfico en Vite + Three.js con el rover Perseverance d
 ## Comandos
 
 - `npm run dev`: servidor en http://localhost:5173
-- `npm run check`: abre la escena en Opera GX con Playwright (`playwright-core`, sin descargar navegadores; si no está, usa Chrome Dev o Edge). Conduce el rover, guarda capturas en `screenshots/` (inicio, tras conducir y girando en el sitio), verifica que las ruedas giren, que los 4 datos del control de misión tengan número y que T lo oculte, hace clic en las 4 cámaras (guarda `check-foto-<cámara>.png` con la foto abierta y prueba flechas y Esc), y termina con código 1 si hay errores de consola. Si el servidor no está corriendo, lo arranca.
+- `npm run check`: abre la escena en Opera GX con Playwright (`playwright-core`, sin descargar navegadores; si no está, usa Chrome Dev o Edge). Conduce el rover, guarda capturas en `screenshots/` (inicio, tras conducir y girando en el sitio), verifica que las ruedas giren, que muevan piedras sueltas y que el rover choque contra una roca grande sin atravesarla (`check-choque.png`), que los 4 datos del control de misión tengan número y que T lo oculte, hace clic en las 4 cámaras (guarda `check-foto-<cámara>.png` con la foto abierta y prueba flechas y Esc), y termina con código 1 si hay errores de consola. Si el servidor no está corriendo, lo arranca.
 
 ## Notas
 

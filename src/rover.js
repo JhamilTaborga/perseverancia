@@ -21,8 +21,8 @@ const CAMERA_INFO = {
 };
 
 // Ejes de las ruedas medidos en el modelo (m): lados ±X, filas delantera/media/trasera en Z (frente = +Z)
-const WHEEL_X = 1.1;
-const WHEEL_Z = [1.25, 0.05, -0.95];
+export const WHEEL_X = 1.1;
+export const WHEEL_Z = [1.25, 0.05, -0.95];
 export const MID_WHEELS = [-WHEEL_X, WHEEL_X].map(x => new THREE.Vector2(x, WHEEL_Z[1]));
 
 // Wheels_objs trae las 6 ruedas en 3 mallas (una por material). Separa los triángulos
@@ -158,7 +158,7 @@ export async function loadRover() {
   return root;
 }
 
-export function createRoverController(rover, startX, startZ, startYaw) {
+export function createRoverController(rover, startX, startZ, startYaw, { collide } = {}) {
   const keys = new Set();
   addEventListener('keydown', e => keys.add(e.code));
   addEventListener('keyup', e => keys.delete(e.code));
@@ -213,6 +213,7 @@ export function createRoverController(rover, startX, startZ, startYaw) {
       const d = state.speed * dt;
       state.x += Math.sin(state.yaw) * d;
       state.z += Math.cos(state.yaw) * d;
+      collide?.(state); // rocas grandes: lo sacan de la roca y lo frenan
       place(dt);
       animateWheels(rover.userData.wheels, state.speed, yawRate, dt);
       return state;

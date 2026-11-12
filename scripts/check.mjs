@@ -80,6 +80,8 @@ try {
 await page.waitForTimeout(2500);
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 await page.screenshot({ path: OUT_START });
+// Física: guarda dónde estaba cada piedra suelta antes de manejar
+await page.evaluate(() => { window.__pebblesStart = window.__physics.pebbles.map(p => [p.x, p.z]); });
 // Conduce: avanza con W y gira con A para comprobar huellas y seguimiento de cámara
 await page.mouse.click(800, 450);
 await page.keyboard.down('KeyW');
@@ -159,6 +161,44 @@ await page.keyboard.press('KeyT');
 const shown2 = await missionVisible();
 logs.push(`[misión] visible al inicio: ${shown0}, tras T: ${shown1}, tras otra T: ${shown2}`);
 if (!(shown0 && !shown1 && shown2)) errors.push('[check] la tecla T no oculta/muestra el control de misión');
+// Física de rocas 1: al manejar, las ruedas empujaron piedras sueltas
+const pebbleInfo = await page.evaluate(() => {
+  const ph = window.__physics;
+  const moved = ph.pebbles.filter((p, i) => Math.hypot(p.x - window.__pebblesStart[i][0], p.z - window.__pebblesStart[i][1]) > 0.05);
+  return { total: ph.pebbles.length, statics: ph.statics.length, moved: moved.length, pushes: ph.stats.pushes,
+    far: Math.max(0, ...moved.map(p => Math.hypot(p.x - window.__pebblesStart[ph.pebbles.indexOf(p)][0], p.z - window.__pebblesStart[ph.pebbles.indexOf(p)][1]))).toFixed(2) };
+});
+logs.push(`[física] ${pebbleInfo.statics} rocas fijas, ${pebbleInfo.total} piedras sueltas; al manejar se movieron ${pebbleInfo.moved} (la que más, ${pebbleInfo.far} m), ${pebbleInfo.pushes} empujones de rueda`);
+if (!pebbleInfo.moved) errors.push('[check] las ruedas no movieron ninguna piedra suelta');
+// Física de rocas 2: de frente contra una roca grande, el rover choca y no la atraviesa
+const crash = async () => {
+  const setup = await page.evaluate(() => {
+    const ph = window.__physics, st = window.__drive.state;
+    const rock = ph.statics.filter(o => o.r > 0.8 && o.r < 3).sort((a, b) => Math.hypot(a.x, a.z - 20) - Math.hypot(b.x, b.z - 20))[0];
+    const yaw = Math.atan2(rock.x - st.x, rock.z - st.z);
+    st.x = rock.x - Math.sin(yaw) * (rock.r + 6); st.z = rock.z - Math.cos(yaw) * (rock.r + 6);
+    st.yaw = yaw; st.speed = 0;
+    window.__crashRock = rock;
+    return { r: rock.r.toFixed(2), bumps: ph.stats.bumps };
+  });
+  await page.keyboard.down('KeyW');
+  await page.waitForTimeout(5000);
+  const end = await page.evaluate(() => {
+    const st = window.__drive.state, rock = window.__crashRock;
+    const sy = Math.sin(st.yaw), cy = Math.cos(st.yaw), dx = rock.x - st.x, dz = rock.z - st.z;
+    const lx = dx * cy - dz * sy, lz = dx * sy + dz * cy;
+    const gap = Math.hypot(lx - Math.max(-1.35, Math.min(1.35, lx)), lz - Math.max(-1.55, Math.min(1.55, lz))) - rock.r;
+    return { gap: gap.toFixed(2), ahead: lz > 0, speed: st.speed.toFixed(2), bumps: window.__physics.stats.bumps };
+  });
+  await page.screenshot({ path: path.resolve('screenshots/check-choque.png') });
+  await page.keyboard.up('KeyW');
+  return { ...setup, ...end };
+};
+const hit = await crash();
+logs.push(`[física] contra una roca de ${hit.r} m de radio: separación ${hit.gap} m, sigue delante: ${hit.ahead}, velocidad ${hit.speed} m/s, choques ${hit.bumps - hit.bumps0 || hit.bumps}`);
+if (Number(hit.gap) < -0.05 || !hit.ahead) errors.push(`[check] el rover atravesó la roca (separación ${hit.gap} m)`);
+if (hit.bumps <= 0) errors.push('[check] el rover no registró el choque con la roca');
+await page.waitForTimeout(1500);
 // Cámaras de Percy: clic en cada punto → foto real revelada; flechas cambian de foto sin mover el rover; Esc vuelve
 const roverPos = () => page.evaluate(() => window.__rover.position.toArray().map(n => n.toFixed(3)).join(','));
 const photoInfo = () => page.evaluate(() => {

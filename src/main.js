@@ -12,6 +12,7 @@ import { createMoons } from './moons.js';
 import { createDust } from './dust.js';
 import { loadRover, createRoverController } from './rover.js';
 import { createTracks } from './tracks.js';
+import { createRockPhysics } from './physics.js';
 import { createMissionControl } from './mission/hud.js';
 import { createCameraPhotos } from './photos/cameras.js';
 
@@ -62,7 +63,10 @@ scene.add(new THREE.HemisphereLight(0xe8a878, 0x5a2814, 0.9));
 
 scene.add(createSky(sunDir));
 scene.add(createTerrain());
-scene.add(createRocks());
+const rocks = createRocks(START);
+scene.add(rocks);
+const physics = createRockPhysics(rocks);
+if (import.meta.env.DEV) window.__physics = physics;
 scene.add(createMoons());
 const dust = createDust(new THREE.Vector3(START.x, heightAt(START.x, START.z) - 1, START.z));
 scene.add(dust);
@@ -75,7 +79,8 @@ loadRover().then(r => {
   rover = r;
   if (import.meta.env.DEV) window.__rover = rover;
   scene.add(rover);
-  drive = createRoverController(rover, START.x, START.z, START.yaw);
+  drive = createRoverController(rover, START.x, START.z, START.yaw, { collide: physics.collideRover });
+  if (import.meta.env.DEV) window.__drive = drive;
   photos = createCameraPhotos(rover, camera);
   if (import.meta.env.DEV) window.__photos = photos;
 }).catch(e => console.error('[rover] no se pudo cargar el modelo:', e));
@@ -87,6 +92,7 @@ const prevTarget = new THREE.Vector3();
 // La cámara se traslada con el rover; al conducir se acomoda suavemente detrás de él
 function followRover(dt) {
   const s = drive.update(dt);
+  physics.update(dt, s);
   prevTarget.copy(controls.target);
   controls.target.set(rover.position.x, rover.position.y + FOLLOW.lookY, rover.position.z);
   camera.position.add(controls.target).sub(prevTarget);

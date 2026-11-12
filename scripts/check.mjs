@@ -159,6 +159,38 @@ await page.keyboard.press('KeyT');
 const shown2 = await missionVisible();
 logs.push(`[misión] visible al inicio: ${shown0}, tras T: ${shown1}, tras otra T: ${shown2}`);
 if (!(shown0 && !shown1 && shown2)) errors.push('[check] la tecla T no oculta/muestra el control de misión');
+// Cámaras de Percy: clic en cada punto → foto real revelada; flechas cambian de foto sin mover el rover; Esc vuelve
+const roverPos = () => page.evaluate(() => window.__rover.position.toArray().map(n => n.toFixed(3)).join(','));
+const photoInfo = () => page.evaluate(() => {
+  const img = document.querySelector('.pv-frame img');
+  return { src: img.currentSrc, w: img.naturalWidth, h: img.naturalHeight,
+    meta: document.querySelector('.pv-meta').innerText.replace(/\s+/g, ' ') };
+});
+const waitRevealed = () => page.waitForFunction(() => window.__photos.state.revealed
+  && document.querySelector('.pv-frame img').naturalWidth > 0, null, { timeout: 30000 });
+for (const key of ['mastcam', 'navcam', 'hazcam', 'watson']) {
+  try {
+    await page.locator(`.pc-dot[data-camera="${key}"]`).click({ timeout: 8000 });
+    await waitRevealed();
+    const first = await photoInfo();
+    await page.screenshot({ path: path.resolve(`screenshots/check-foto-${key}.png`) });
+    const before = await roverPos();
+    await page.keyboard.press('ArrowRight');
+    await waitRevealed();
+    const second = await photoInfo();
+    const after = await roverPos();
+    await page.keyboard.press('Escape');
+    const closed = await page.evaluate(() => !window.__photos.isOpen());
+    logs.push(`[fotos] ${key}: ${first.w}×${first.h} "${first.meta}" → con → otra foto: ${second.src !== first.src}, rover quieto: ${before === after}, Esc cierra: ${closed}`);
+    if (!(first.w > 0 && /mars\.nasa\.gov/.test(first.src))) errors.push(`[check] ${key} no abrió una foto real de la NASA`);
+    if (second.src === first.src) errors.push(`[check] ${key}: la flecha → no cambió de foto`);
+    if (before !== after) errors.push(`[check] ${key}: las flechas movieron el rover con el visor abierto`);
+    if (!closed) errors.push(`[check] ${key}: Esc no cerró el visor`);
+  } catch (e) {
+    errors.push(`[check] la cámara ${key} no abrió su foto: ${e.message.split('\n')[0]}`);
+    await page.keyboard.press('Escape');
+  }
+}
 // Al cambiar el tamaño de la ventana, cada parte de los cuadros (nombre, número, gráfica, frase, fuente)
 // debe quedar a la misma altura en todos los cuadros de una fila, con o sin mouse encima
 const PARTS = ['.mc-name', '.mc-value', 'canvas', '.mc-say', '.mc-src'];

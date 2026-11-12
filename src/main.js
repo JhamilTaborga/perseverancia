@@ -13,6 +13,7 @@ import { createDust } from './dust.js';
 import { loadRover, createRoverController } from './rover.js';
 import { createTracks } from './tracks.js';
 import { createMissionControl } from './mission/hud.js';
+import { createCameraPhotos } from './photos/cameras.js';
 
 const mission = createMissionControl();
 if (import.meta.env.DEV) window.__mission = mission;
@@ -69,12 +70,14 @@ scene.add(dust);
 const tracks = createTracks(renderer.capabilities.getMaxAnisotropy());
 scene.add(tracks.mesh);
 
-let rover = null, drive = null;
+let rover = null, drive = null, photos = null;
 loadRover().then(r => {
   rover = r;
   if (import.meta.env.DEV) window.__rover = rover;
   scene.add(rover);
   drive = createRoverController(rover, START.x, START.z, START.yaw);
+  photos = createCameraPhotos(rover, camera);
+  if (import.meta.env.DEV) window.__photos = photos;
 }).catch(e => console.error('[rover] no se pudo cargar el modelo:', e));
 
 const followOffset = new THREE.Vector3();
@@ -136,6 +139,7 @@ renderer.setAnimationLoop(() => {
   dust.userData.update(dt, t);
   grade.uniforms.time.value = t % 10;
   composer.render();
+  photos?.update();
   if (rover && ++frames === 3) window.__sceneReady = true;
 });
 
